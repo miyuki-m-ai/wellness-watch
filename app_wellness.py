@@ -108,6 +108,26 @@ if not st.session_state.authenticated:
 # =============================================
 def speak(text):
     """ブラウザのWeb Speech APIで音声合成する"""
+    # --- 誤読み修正（表示テキストは変えず、読み上げ用に置換）---
+    text = text.replace("今日は", "こんにちは")   # 挨拶を先に処理
+    text = text.replace("今日", "きょう")
+    text = text.replace("明日", "あした")
+    text = text.replace("昨日", "きのう")
+    text = text.replace("今夜", "こんや")
+    text = text.replace("今朝", "けさ")
+    text = text.replace("今週", "こんしゅう")
+    text = text.replace("来週", "らいしゅう")
+    text = text.replace("先週", "せんしゅう")
+    text = text.replace("今月", "こんげつ")
+    text = text.replace("来月", "らいげつ")
+    text = text.replace("今年", "ことし")
+    text = text.replace("来年", "らいねん")
+    text = text.replace("元気", "げんき")
+    text = text.replace("大丈夫", "だいじょうぶ")
+    text = text.replace("一緒", "いっしょ")
+    text = text.replace("嬉しい", "うれしい")
+    text = text.replace("嬉しかった", "うれしかった")
+    # ----------------------------------------------------------
     # バッククォート・バックスラッシュ・$をエスケープしてJSテンプレートリテラルに安全に埋め込む
     escaped = (
         text
