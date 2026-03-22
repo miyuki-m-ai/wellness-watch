@@ -1,0 +1,5 @@
+openai
+azure-cognitiveservices-speech
+python-dotenv
+streamlit
+plotly
