@@ -3,3 +3,4 @@ azure-cognitiveservices-speech
 python-dotenv
 streamlit
 plotly
+streamlit-javascript

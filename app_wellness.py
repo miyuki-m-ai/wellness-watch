@@ -1,12 +1,12 @@
 """
 wellness monitoring app - voice version with password
-speak() → Web Speech API (TTS)
-listen_ui() → Web Speech API (STT) + 隠しinput経由でStreamlitに送信
+STT: st_javascript を使ってJS→Pythonに音声認識結果を渡す
 """
 
 import os
 import streamlit as st
 import streamlit.components.v1 as components
+from streamlit_javascript import st_javascript
 from dotenv import load_dotenv
 from openai import AzureOpenAI
 from core_chatbot import (
@@ -64,14 +64,6 @@ st.markdown("""
     font-size:1.5rem !important; height:60px !important;
     text-align:center !important; border-radius:15px !important;
   }
-  /* 隠しinputを完全に非表示 */
-  div[data-testid="stTextInput"].hidden-input {
-    position: absolute !important;
-    opacity: 0 !important;
-    height: 0 !important;
-    overflow: hidden !important;
-    pointer-events: none !important;
-  }
 </style>
 """, unsafe_allow_html=True)
 
@@ -101,11 +93,9 @@ if not st.session_state.authenticated:
 
 
 # =============================================
-# speak() - Web Speech API版（TTS）
+# speak() - Web Speech API TTS版
 # =============================================
 def speak(text):
-    """ブラウザのWeb Speech APIで音声合成する"""
-    # 誤読み修正
     text = text.replace("今日", "きょう")
     text = text.replace("明日", "あした")
     text = text.replace("昨日", "きのう")
@@ -123,7 +113,6 @@ def speak(text):
     text = text.replace("一緒", "いっしょ")
     text = text.replace("嬉しい", "うれしい")
     text = text.replace("嬉しかった", "うれしかった")
-
     escaped = (
         text
         .replace("\\", "\\\\")
@@ -155,100 +144,6 @@ def speak(text):
     </script>
     """
     components.html(js, height=0)
-
-
-# =============================================
-# listen_ui() - Web Speech API STT版
-# 隠しst.text_inputにJSで値を書き込み、
-# Streamlitのchange検知で処理する
-# =============================================
-def listen_ui():
-    """
-    マイクボタン（JS）→ 音声認識 → 隠しinputに書き込み
-    → Streamlitがchange検知 → on_changeコールバックで処理
-    """
-    # JS側から書き込むinputのDOMを特定するためのラベル
-    js = """
-    <script>
-    function startListening() {
-        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-        if (!SpeechRecognition) {
-            alert('音声認識に対応していません。Chromeをお使いください。');
-            return;
-        }
-
-        const recognition = new SpeechRecognition();
-        recognition.lang = 'ja-JP';
-        recognition.interimResults = false;
-        recognition.maxAlternatives = 1;
-
-        const btn = document.getElementById('mic-btn');
-        btn.textContent = '🎤 きいています...';
-        btn.disabled = true;
-        btn.style.background = 'linear-gradient(135deg,#ff4444,#cc0000)';
-
-        recognition.onresult = function(event) {
-            const text = event.results[0][0].transcript;
-
-            // Streamlitの隠しinput（data-testid="stTextInput" 内のinput）を探して値をセット
-            const inputs = window.parent.document.querySelectorAll('input[type="text"]');
-            for (let inp of inputs) {
-                if (inp.dataset.voiceTarget === 'true' || inp.getAttribute('aria-label') === 'voice_hidden') {
-                    // React管理のinputに値をセットする方法
-                    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.parent.HTMLInputElement.prototype, 'value').set;
-                    nativeInputValueSetter.call(inp, text);
-                    inp.dispatchEvent(new Event('input', { bubbles: true }));
-                    break;
-                }
-            }
-
-            btn.textContent = '🎤 はなしかける';
-            btn.disabled = false;
-            btn.style.background = 'linear-gradient(135deg,#ff8fab,#e75480)';
-        };
-
-        recognition.onerror = function(event) {
-            btn.textContent = '🎤 はなしかける';
-            btn.disabled = false;
-            btn.style.background = 'linear-gradient(135deg,#ff8fab,#e75480)';
-            if (event.error !== 'no-speech') {
-                alert('もう一度はなしかけてください');
-            }
-        };
-
-        recognition.onend = function() {
-            btn.disabled = false;
-            btn.textContent = '🎤 はなしかける';
-            btn.style.background = 'linear-gradient(135deg,#ff8fab,#e75480)';
-        };
-
-        recognition.start();
-    }
-    </script>
-
-    <div style="margin:10px 0;">
-      <button id="mic-btn" onclick="startListening()" style="
-        width:100%; height:110px; font-size:1.8rem; font-weight:bold;
-        border:none; border-radius:20px; cursor:pointer; color:white;
-        background:linear-gradient(135deg,#ff8fab,#e75480);
-        box-shadow:0 6px 20px rgba(231,84,128,0.4);
-        font-family:'Hiragino Sans','Meiryo',sans-serif;
-      ">🎤 はなしかける</button>
-    </div>
-    """
-    components.html(js, height=130)
-
-
-def on_voice_input():
-    """隠しinputの値が変わったときに呼ばれるコールバック"""
-    text = st.session_state.get("voice_hidden", "").strip()
-    if not text:
-        return
-    # 処理済みフラグで二重処理を防止
-    if st.session_state.get("last_processed") == text:
-        return
-    st.session_state.last_processed = text
-    st.session_state.pending_voice = text
 
 
 def is_end_word(text):
@@ -317,15 +212,13 @@ def end_conversation():
 if "initialized" not in st.session_state:
     init_db()
     memory = load_recent_memory(USER_ID, days=3)
-    st.session_state.memory        = memory
-    st.session_state.history       = []
-    st.session_state.messages      = []
-    st.session_state.turn          = 0
-    st.session_state.talking       = False
-    st.session_state.finished      = False
-    st.session_state.pending_voice = ""
-    st.session_state.last_processed = ""
-    st.session_state.initialized   = True
+    st.session_state.memory      = memory
+    st.session_state.history     = []
+    st.session_state.messages    = []
+    st.session_state.turn        = 0
+    st.session_state.talking     = False
+    st.session_state.finished    = False
+    st.session_state.initialized = True
 
     greeting = chat_flexible("おはようございます", [], memory)
     st.session_state.history  += [{"role":"user","content":"おはようございます"},{"role":"assistant","content":greeting["reply"]}]
@@ -353,31 +246,47 @@ for msg in st.session_state.messages[-6:]:
 
 st.divider()
 
-# pending_voiceがあれば処理（コールバック経由）
-if st.session_state.get("pending_voice"):
-    user_text = st.session_state.pending_voice
-    st.session_state.pending_voice = ""
-    if is_end_word(user_text):
-        end_conversation()
-        st.rerun()
-    else:
-        st.session_state.turn += 1
-        result = chat_flexible(user_text, st.session_state.history, st.session_state.memory)
-        st.session_state.history += [{"role":"user","content":user_text},{"role":"assistant","content":result["reply"]}]
-        st.session_state.messages += [{"role":"user","text":user_text},{"role":"bot","text":result["reply"]}]
-        save_log_direct(result, st.session_state.turn)
-        speak(result["reply"])
-        st.rerun()
+# =============================================
+# st_javascript で音声認識結果を受け取る
+# ボタンを押したタイミングで一度だけ実行
+# =============================================
+if st.button("🎤 はなしかける", key="mic_btn", use_container_width=True):
+    st.session_state.listening = True
+    st.rerun()
 
-# 隠しinput（JSから音声認識結果を受け取る）
-st.markdown('<div style="position:absolute;opacity:0;height:0;overflow:hidden;pointer-events:none;">', unsafe_allow_html=True)
-st.text_input("voice_hidden", key="voice_hidden", label_visibility="collapsed", on_change=on_voice_input)
-st.markdown('</div>', unsafe_allow_html=True)
+if st.session_state.get("listening"):
+    st.info("🎤 きいています... はなしかけてください")
+    voice_result = st_javascript("""
+        await new Promise((resolve) => {
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if (!SpeechRecognition) { resolve(""); return; }
+            const recognition = new SpeechRecognition();
+            recognition.lang = 'ja-JP';
+            recognition.interimResults = false;
+            recognition.maxAlternatives = 1;
+            recognition.onresult = (e) => resolve(e.results[0][0].transcript);
+            recognition.onerror  = () => resolve("");
+            recognition.onend    = () => {};
+            recognition.start();
+        });
+    """)
 
-# マイクボタン
-listen_ui()
+    st.session_state.listening = False
 
-# おわるボタン
+    if voice_result and isinstance(voice_result, str) and voice_result.strip():
+        user_text = voice_result.strip()
+        if is_end_word(user_text):
+            end_conversation()
+            st.rerun()
+        else:
+            st.session_state.turn += 1
+            result = chat_flexible(user_text, st.session_state.history, st.session_state.memory)
+            st.session_state.history += [{"role":"user","content":user_text},{"role":"assistant","content":result["reply"]}]
+            st.session_state.messages += [{"role":"user","text":user_text},{"role":"bot","text":result["reply"]}]
+            save_log_direct(result, st.session_state.turn)
+            speak(result["reply"])
+            st.rerun()
+
 st.markdown('<div class="btn-end">', unsafe_allow_html=True)
 end_btn = st.button("👋 おわる", key="end_btn", use_container_width=True)
 st.markdown('</div>', unsafe_allow_html=True)
