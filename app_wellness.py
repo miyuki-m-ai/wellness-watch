@@ -109,7 +109,6 @@ if not st.session_state.authenticated:
 def speak(text):
     """ブラウザのWeb Speech APIで音声合成する"""
     # --- 誤読み修正（表示テキストは変えず、読み上げ用に置換）---
-    text = text.replace("今日は", "こんにちは")   # 挨拶を先に処理
     text = text.replace("今日", "きょう")
     text = text.replace("明日", "あした")
     text = text.replace("昨日", "きのう")
