@@ -171,15 +171,71 @@ def speak(text):
 
 
 # =============================================
-# listen() - 現状はテキスト入力で代替
-# ※ Web Speech API (STT) 版は今後実装予定
+# listen_ui() - Web Speech API STT版
+# ボタンを押すとJSがマイクで録音し、認識結果を
+# st.query_params経由でStreamlitに返す
 # =============================================
-def listen():
+def listen_ui():
+    """マイクボタンをレンダリングし、音声認識結果をquery_paramsで受け取る"""
+    js = """
+    <script>
+    function startListening() {
+        if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+            alert('このブラウザは音声認識に対応していません。Chromeをお使いください。');
+            return;
+        }
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        const recognition = new SpeechRecognition();
+        recognition.lang = 'ja-JP';
+        recognition.interimResults = false;
+        recognition.maxAlternatives = 1;
+
+        const btn = document.getElementById('mic-btn');
+        btn.textContent = '🎤 きいています...';
+        btn.disabled = true;
+        btn.style.background = 'linear-gradient(135deg,#ff4444,#cc0000)';
+
+        recognition.onresult = function(event) {
+            const text = event.results[0][0].transcript;
+            btn.textContent = '🎤 はなしかける';
+            btn.disabled = false;
+            btn.style.background = 'linear-gradient(135deg,#ff8fab,#e75480)';
+            const url = new URL(window.parent.location.href);
+            url.searchParams.set('voice_input', encodeURIComponent(text));
+            window.parent.location.href = url.toString();
+        };
+
+        recognition.onerror = function(event) {
+            btn.textContent = '🎤 はなしかける';
+            btn.disabled = false;
+            btn.style.background = 'linear-gradient(135deg,#ff8fab,#e75480)';
+            if (event.error !== 'no-speech') {
+                alert('もう一度はなしかけてください');
+            }
+        };
+
+        recognition.onend = function() {
+            if (!btn.disabled) return;
+            btn.textContent = '🎤 はなしかける';
+            btn.disabled = false;
+            btn.style.background = 'linear-gradient(135deg,#ff8fab,#e75480)';
+        };
+
+        recognition.start();
+    }
+    </script>
+
+    <div style="text-align:center; margin:10px 0;">
+      <button id="mic-btn" onclick="startListening()" style="
+        width:100%; height:110px; font-size:1.8rem; font-weight:bold;
+        border:none; border-radius:20px; cursor:pointer; color:white;
+        background:linear-gradient(135deg,#ff8fab,#e75480);
+        box-shadow:0 6px 20px rgba(231,84,128,0.4);
+        font-family:'Hiragino Sans','Meiryo',sans-serif;
+      ">🎤 はなしかける</button>
+    </div>
     """
-    暫定：st.text_inputでテキスト入力を受け付ける。
-    Web Speech API (STT) 版への置き換えは次のステップで対応。
-    """
-    return st.session_state.get("user_input_text", "")
+    components.html(js, height=130)
 
 
 def is_end_word(text):
@@ -283,46 +339,36 @@ for msg in st.session_state.messages[-6:]:
 st.divider()
 
 # =============================================
-# テキスト入力UI（listen()の暫定代替）
+# 音声入力UI（Web Speech API STT）
+# query_paramsで音声認識結果を受け取り処理する
 # =============================================
-user_input = st.text_input(
-    "メッセージをいれてください",
-    key="user_input_text",
-    label_visibility="visible",
-    placeholder="ここにことばをいれてください…"
-)
 
-col1, col2 = st.columns([3, 2])
+# voice_inputがquery_paramsに来ていたら処理
+voice_input = st.query_params.get("voice_input", "")
+if voice_input:
+    # query_paramsをクリア（二重処理防止）
+    st.query_params.clear()
+    user_text = voice_input
+    if is_end_word(user_text):
+        end_conversation()
+        st.rerun()
+    else:
+        st.session_state.turn += 1
+        result = chat_flexible(user_text, st.session_state.history, st.session_state.memory)
+        st.session_state.history += [{"role":"user","content":user_text},{"role":"assistant","content":result["reply"]}]
+        st.session_state.messages += [{"role":"user","text":user_text},{"role":"bot","text":result["reply"]}]
+        save_log_direct(result, st.session_state.turn)
+        speak(result["reply"])
+        st.rerun()
 
-with col1:
-    st.markdown('<div class="btn-talk">', unsafe_allow_html=True)
-    talk_btn = st.button(
-        "💬 おくる",
-        key="talk_btn", use_container_width=True,
-        disabled=st.session_state.talking or not user_input
-    )
-    st.markdown('</div>', unsafe_allow_html=True)
+# マイクボタン
+listen_ui()
 
-with col2:
-    st.markdown('<div class="btn-end">', unsafe_allow_html=True)
-    end_btn = st.button("👋 おわる", key="end_btn", use_container_width=True)
-    st.markdown('</div>', unsafe_allow_html=True)
+# おわるボタン
+st.markdown('<div class="btn-end">', unsafe_allow_html=True)
+end_btn = st.button("👋 おわる", key="end_btn", use_container_width=True)
+st.markdown('</div>', unsafe_allow_html=True)
 
 if end_btn:
     end_conversation()
     st.rerun()
-
-if talk_btn and user_input:
-    if is_end_word(user_input):
-        end_conversation()
-        st.rerun()
-    else:
-        st.session_state.talking = True
-        st.session_state.turn += 1
-        result = chat_flexible(user_input, st.session_state.history, st.session_state.memory)
-        st.session_state.history += [{"role":"user","content":user_input},{"role":"assistant","content":result["reply"]}]
-        st.session_state.messages += [{"role":"user","text":user_input},{"role":"bot","text":result["reply"]}]
-        save_log_direct(result, st.session_state.turn)
-        speak(result["reply"])
-        st.session_state.talking = False
-        st.rerun()
