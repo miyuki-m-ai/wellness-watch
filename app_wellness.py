@@ -250,32 +250,36 @@ st.divider()
 # st_javascript で音声認識結果を受け取る
 # ボタンを押したタイミングで一度だけ実行
 # =============================================
-if st.button("🎤 はなしかける", key="mic_btn", use_container_width=True):
-    st.session_state.listening = True
-    st.rerun()
-
-if st.session_state.get("listening"):
+if not st.session_state.get("listening"):
+    if st.button("🎤 はなしかける", key="mic_btn", use_container_width=True):
+        st.session_state.listening = True
+        st.session_state.voice_result = None
+        st.rerun()
+else:
     st.info("🎤 きいています... はなしかけてください")
     voice_result = st_javascript("""
         await new Promise((resolve) => {
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-            if (!SpeechRecognition) { resolve(""); return; }
+            if (!SpeechRecognition) { resolve("__unsupported__"); return; }
             const recognition = new SpeechRecognition();
             recognition.lang = 'ja-JP';
             recognition.interimResults = false;
             recognition.maxAlternatives = 1;
             recognition.onresult = (e) => resolve(e.results[0][0].transcript);
-            recognition.onerror  = () => resolve("");
-            recognition.onend    = () => {};
+            recognition.onerror  = (e) => resolve("__error__");
             recognition.start();
         });
     """)
 
-    st.session_state.listening = False
-
-    if voice_result and isinstance(voice_result, str) and voice_result.strip():
+    # voice_resultが返ってきたとき（0やNoneでなく文字列）だけ処理
+    if voice_result is not None and isinstance(voice_result, str):
+        st.session_state.listening = False
         user_text = voice_result.strip()
-        if is_end_word(user_text):
+
+        if user_text in ("", "__unsupported__", "__error__"):
+            st.warning("もう一度はなしかけてください")
+            st.rerun()
+        elif is_end_word(user_text):
             end_conversation()
             st.rerun()
         else:
