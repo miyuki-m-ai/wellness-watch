@@ -1,10 +1,12 @@
 """
 wellness monitoring app - voice version with password
+speak() → Web Speech API (ブラウザ音声合成) に変更
+listen() は今後対応予定
 """
 
 import os
 import streamlit as st
-import azure.cognitiveservices.speech as speechsdk
+import streamlit.components.v1 as components
 from dotenv import load_dotenv
 from openai import AzureOpenAI
 from core_chatbot import (
@@ -17,9 +19,7 @@ import sqlite3
 
 load_dotenv()
 
-SPEECH_KEY    = os.getenv("AZURE_SPEECH_KEY")
-SPEECH_REGION = os.getenv("AZURE_SPEECH_REGION", "japaneast")
-USER_ID       = os.getenv("USER_ID", "parent_mom")
+USER_ID = os.getenv("USER_ID", "parent_mom")
 
 client = AzureOpenAI(
     azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
@@ -103,38 +103,64 @@ if not st.session_state.authenticated:
     st.stop()
 
 
-def create_speech_config():
-    config = speechsdk.SpeechConfig(subscription=SPEECH_KEY, region=SPEECH_REGION)
-    config.speech_recognition_language = "ja-JP"
-    config.speech_synthesis_language   = "ja-JP"
-    config.speech_synthesis_voice_name = "ja-JP-KeitaNeural"
-    config.set_property(speechsdk.PropertyId.SpeechServiceConnection_InitialSilenceTimeoutMs, "8000")
-    config.set_property(speechsdk.PropertyId.SpeechServiceConnection_EndSilenceTimeoutMs, "1500")
-    return config
-
-
-def listen():
-    config     = create_speech_config()
-    recognizer = speechsdk.SpeechRecognizer(speech_config=config)
-    result     = recognizer.recognize_once_async().get()
-    if result.reason == speechsdk.ResultReason.RecognizedSpeech:
-        return result.text
-    return ""
-
-
+# =============================================
+# speak() - Web Speech API版（Azure Speech SDK不要）
+# =============================================
 def speak(text):
-    config      = create_speech_config()
-    synthesizer = speechsdk.SpeechSynthesizer(speech_config=config)
-    t = text.replace("。", "。<break time='400ms'/>").replace("、", "、<break time='200ms'/>")
-    ssml = f"""<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis'
-        xmlns:mstts='http://www.w3.org/2001/mstts' xml:lang='ja-JP'>
-      <voice name='ja-JP-KeitaNeural'>
-        <mstts:express-as style='friendly' styledegree='2.0'>
-          <prosody rate='0.85' pitch='+5%' volume='soft'>{t}</prosody>
-        </mstts:express-as>
-      </voice>
-    </speak>"""
-    synthesizer.speak_ssml_async(ssml).get()
+    """ブラウザのWeb Speech APIで音声合成する"""
+    # バッククォート・バックスラッシュ・$をエスケープしてJSテンプレートリテラルに安全に埋め込む
+    escaped = (
+        text
+        .replace("\\", "\\\\")
+        .replace("`", "\\`")
+        .replace("$", "\\$")
+    )
+    js = f"""
+    <script>
+    (function() {{
+        if (!('speechSynthesis' in window)) {{
+            console.warn('Web Speech API not supported');
+            return;
+        }}
+        window.speechSynthesis.cancel();
+
+        const utter = new SpeechSynthesisUtterance(`{escaped}`);
+        utter.lang    = 'ja-JP';
+        utter.rate    = 0.85;   // ゆっくり話す（高齢者向け）
+        utter.pitch   = 1.1;
+        utter.volume  = 0.9;
+
+        const trySpeak = () => {{
+            const voices = window.speechSynthesis.getVoices();
+            // ja-JP の音声を優先選択（なければデフォルト）
+            const jaVoice = voices.find(v => v.lang === 'ja-JP' || v.lang.startsWith('ja'));
+            if (jaVoice) utter.voice = jaVoice;
+            window.speechSynthesis.speak(utter);
+        }};
+
+        // getVoices() は非同期で読み込まれる場合があるため両方対応
+        if (window.speechSynthesis.getVoices().length > 0) {{
+            trySpeak();
+        }} else {{
+            window.speechSynthesis.onvoiceschanged = trySpeak;
+        }}
+    }})();
+    </script>
+    """
+    # height=0 で非表示のiframeとして注入
+    components.html(js, height=0)
+
+
+# =============================================
+# listen() - 現状はテキスト入力で代替
+# ※ Web Speech API (STT) 版は今後実装予定
+# =============================================
+def listen():
+    """
+    暫定：st.text_inputでテキスト入力を受け付ける。
+    Web Speech API (STT) 版への置き換えは次のステップで対応。
+    """
+    return st.session_state.get("user_input_text", "")
 
 
 def is_end_word(text):
@@ -237,14 +263,24 @@ for msg in st.session_state.messages[-6:]:
 
 st.divider()
 
+# =============================================
+# テキスト入力UI（listen()の暫定代替）
+# =============================================
+user_input = st.text_input(
+    "メッセージをいれてください",
+    key="user_input_text",
+    label_visibility="visible",
+    placeholder="ここにことばをいれてください…"
+)
+
 col1, col2 = st.columns([3, 2])
 
 with col1:
     st.markdown('<div class="btn-talk">', unsafe_allow_html=True)
     talk_btn = st.button(
-        "🎤 きいています..." if st.session_state.talking else "🎤 はなしかける",
+        "💬 おくる",
         key="talk_btn", use_container_width=True,
-        disabled=st.session_state.talking
+        disabled=st.session_state.talking or not user_input
     )
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -257,25 +293,17 @@ if end_btn:
     end_conversation()
     st.rerun()
 
-if talk_btn:
-    st.session_state.talking = True
-    st.rerun()
-
-if st.session_state.talking:
-    st.markdown('<div class="status-talking">🎤 きいています...「バイバイ」でおわります</div>', unsafe_allow_html=True)
-    user_text = listen()
-
-    if not user_text:
-        speak("もう一度おはなしください。")
-        st.rerun()
-    elif is_end_word(user_text):
+if talk_btn and user_input:
+    if is_end_word(user_input):
         end_conversation()
         st.rerun()
     else:
+        st.session_state.talking = True
         st.session_state.turn += 1
-        result = chat_flexible(user_text, st.session_state.history, st.session_state.memory)
-        st.session_state.history += [{"role":"user","content":user_text},{"role":"assistant","content":result["reply"]}]
-        st.session_state.messages += [{"role":"user","text":user_text},{"role":"bot","text":result["reply"]}]
+        result = chat_flexible(user_input, st.session_state.history, st.session_state.memory)
+        st.session_state.history += [{"role":"user","content":user_input},{"role":"assistant","content":result["reply"]}]
+        st.session_state.messages += [{"role":"user","text":user_input},{"role":"bot","text":result["reply"]}]
         save_log_direct(result, st.session_state.turn)
         speak(result["reply"])
+        st.session_state.talking = False
         st.rerun()
