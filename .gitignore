@@ -5,3 +5,4 @@ __pycache__/
 wellness.db
 *.db
 env.json
+deploy.zip
