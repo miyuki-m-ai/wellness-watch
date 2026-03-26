@@ -383,7 +383,7 @@ def handle_message(user_id: str, reply_token: str, user_text: str, use_voice: bo
         f"  └ 感情：{result['sentiment']:.2f} "
         f"| tokens：{result['input_tokens'] + result['output_tokens']}"
     )
-
+        save_log(result, turn_count=1)
     if use_voice:
         # TTS → wav を一時ファイルに保存
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
