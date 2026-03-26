@@ -1,6 +1,12 @@
 openai
-azure-cognitiveservices-speech
 python-dotenv
 streamlit
 plotly
 streamlit-javascript
+line-bot-sdk
+azure-cognitiveservices-speech
+schedule
+flask
+azure-data-tables
+azure-storage-blob
+gunicorn

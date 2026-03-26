@@ -42,6 +42,7 @@ from dotenv import load_dotenv
 from flask import Flask, abort, request
 
 from core_chatbot import chat, get_weekly_stats
+from notify import send_line_message
 
 load_dotenv()
 
@@ -60,6 +61,8 @@ app = Flask(__name__)
 
 # 会話履歴（メモリ上）
 conversation_history: dict[str, list] = {}
+# 朝の起床通知済みフラグ（日付ごとに管理）
+morning_notified: dict[str, str] = {}  # user_id -> 通知済みの日付
 
 
 # =============================================
@@ -240,7 +243,7 @@ def upload_and_reply_audio(reply_token: str, wav_path: str, user_id: str):
     try:
         result_probe = subprocess.run(
             [
-                "ffprobe", "-v", "error",
+                "/home/site/wwwroot/ffprobe", "-v", "error",
                 "-show_entries", "format=duration",
                 "-of", "default=noprint_wrappers=1:nokey=1",
                 wav_path,
@@ -333,6 +336,14 @@ def handle_message(user_id: str, reply_token: str, user_text: str, use_voice: bo
     user_text を受け取り、返答を生成して返信する。
     use_voice=True のとき、返答をTTSして音声でも送信する。
     """
+    # 朝6:30〜10:00の最初のメッセージでみゆきさんに通知
+    now = datetime.now(timezone(timedelta(hours=9)))  # JST
+    today_str = now.date().isoformat()
+    if (LINE_MOM_USER_ID and user_id == LINE_MOM_USER_ID
+            and 6 <= now.hour < 10
+            and morning_notified.get(user_id) != today_str):
+        morning_notified[user_id] = today_str
+        send_line_message("🌅 おはようございます！\nじゅんこさんが起きてLINEに返事をしましたよ😊")
     parent_name = "お母さん" if (LINE_MOM_USER_ID and user_id == LINE_MOM_USER_ID) else "ユーザー"
 
     # 特殊コマンド
@@ -400,6 +411,9 @@ def handle_message(user_id: str, reply_token: str, user_text: str, use_voice: bo
 # =============================================
 # Webhook エンドポイント
 # =============================================
+@app.route("/", methods=["GET"])
+def health_check():
+    return "OK", 200
 @app.route("/callback", methods=["POST"])
 def callback():
     # 署名検証
@@ -447,7 +461,7 @@ def callback():
             try:
                 result_ffmpeg = subprocess.run(
                     [
-                        "ffmpeg", "-y",
+                        "/home/site/wwwroot/ffmpeg", "-y",
                         "-i", m4a_path,
                         "-ar", "16000",   # サンプルレート 16kHz
                         "-ac", "1",       # モノラル
@@ -493,7 +507,103 @@ def callback():
 
     return "OK", 200
 
+# =============================================
+# お父さん用 Webhook エンドポイント
+# =============================================
+LINE_DAD_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_DAD_CHANNEL_ACCESS_TOKEN")
+LINE_DAD_CHANNEL_SECRET       = os.getenv("LINE_DAD_CHANNEL_SECRET")
+LINE_DAD_USER_ID              = os.getenv("LINE_DAD_USER_ID", "")
 
+@app.route("/callback_dad", methods=["POST"])
+def callback_dad():
+    signature = request.headers.get("X-Line-Signature", "")
+    body      = request.get_data()
+
+    # お父さん用の署名検証
+    hash_ = hmac.new(
+        LINE_DAD_CHANNEL_SECRET.encode("utf-8"),
+        body,
+        hashlib.sha256,
+    ).digest()
+    expected = base64.b64encode(hash_).decode("utf-8")
+    if not hmac.compare_digest(expected, signature):
+        print("❌ お父さん用署名検証失敗")
+        abort(400)
+
+    events = json.loads(body).get("events", [])
+
+    for event in events:
+        if event.get("type") != "message":
+            continue
+
+        msg_type    = event["message"].get("type")
+        user_id     = event["source"]["userId"]
+        reply_token = event["replyToken"]
+
+        print(f"📩 お父さん受信：{user_id} | タイプ：{msg_type}")
+
+        if msg_type == "text":
+            user_text = event["message"]["text"]
+            handle_message(user_id, reply_token, user_text, use_voice=False)
+        elif msg_type == "audio":
+            # お母さんと同じ音声処理
+            message_id  = event["message"]["id"]
+            audio_bytes = get_line_audio_content_dad(message_id)
+            if not audio_bytes:
+                reply_text(reply_token, "音声を受け取れませんでした。もう一度お話しください。")
+                continue
+
+            with tempfile.NamedTemporaryFile(suffix=".m4a", delete=False) as tmp:
+                tmp.write(audio_bytes)
+                m4a_path = tmp.name
+
+            wav_path_stt = m4a_path.replace(".m4a", "_stt.wav")
+            try:
+                result_ffmpeg = subprocess.run(
+                    ["/home/site/wwwroot/ffmpeg", "-y", "-i", m4a_path,
+                     "-ar", "16000", "-ac", "1", wav_path_stt],
+                    capture_output=True, text=True,
+                )
+                if result_ffmpeg.returncode != 0:
+                    raise RuntimeError(result_ffmpeg.stderr)
+            except Exception as e:
+                print(f"⚠️ 音声変換失敗：{e}")
+                reply_text(reply_token, "音声の変換に失敗しました。もう一度お話しください。")
+                try:
+                    os.remove(m4a_path)
+                except OSError:
+                    pass
+                continue
+
+            recognized_text = speech_to_text(wav_path_stt)
+
+            for path in [m4a_path, wav_path_stt]:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+
+            if not recognized_text:
+                reply_text(reply_token, "ごめんなさい、聞き取れませんでした。もう一度お話しください。")
+                continue
+
+            handle_message(user_id, reply_token, recognized_text, use_voice=True)
+
+    return "OK", 200
+
+
+def get_line_audio_content_dad(message_id: str) -> bytes | None:
+    url = f"https://api-data.line.me/v2/bot/message/{message_id}/content"
+    req = urllib.request.Request(
+        url,
+        headers={"Authorization": f"Bearer {LINE_DAD_CHANNEL_ACCESS_TOKEN}"},
+    )
+    try:
+        with urllib.request.urlopen(req) as resp:
+            return resp.read()
+    except Exception as e:
+        print(f"⚠️ お父さん音声コンテンツ取得失敗：{e}")
+        return None
 # =============================================
 # 起動
 # =============================================

@@ -10,12 +10,11 @@ from streamlit_javascript import st_javascript
 from dotenv import load_dotenv
 from openai import AzureOpenAI
 from core_chatbot import (
-    init_db, save_memory,
+    init_db, save_log, save_memory,
     load_recent_memory, summarize_conversation,
-    get_sentiment, DB_PATH
+    get_sentiment,
 )
-from datetime import datetime, date
-import sqlite3
+from datetime import datetime
 
 load_dotenv()
 
@@ -177,31 +176,18 @@ def chat_flexible(message, history, memory_summary=""):
     reply = response.choices[0].message.content
     sentiment = get_sentiment(message)
     return {
-        "reply": reply, "sentiment": sentiment,
-        "input_tokens": response.usage.prompt_tokens,
+        "reply"        : reply,
+        "sentiment"    : sentiment,
+        "input_tokens" : response.usage.prompt_tokens,
         "output_tokens": response.usage.completion_tokens,
-        "timestamp": datetime.now().isoformat(), "user_id": USER_ID,
+        "timestamp"    : datetime.now().isoformat(),
+        "user_id"      : USER_ID,
     }
-
-
-def save_log_direct(log, turn_count=1):
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("""CREATE TABLE IF NOT EXISTS daily_log (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, date TEXT, timestamp TEXT,
-        sentiment REAL, input_tokens INTEGER, output_tokens INTEGER, turn_count INTEGER DEFAULT 1
-    )""")
-    conn.execute(
-        "INSERT INTO daily_log (user_id,date,timestamp,sentiment,input_tokens,output_tokens,turn_count) VALUES (?,?,?,?,?,?,?)",
-        (log["user_id"], date.today().isoformat(), log["timestamp"],
-         log["sentiment"], log["input_tokens"], log["output_tokens"], turn_count)
-    )
-    conn.commit()
-    conn.close()
 
 
 def end_conversation():
     speak("今日もお話できて嬉しかったです。またお話しましょうね。")
-    st.session_state.messages.append({"role":"bot","text":"今日もお話できて嬉しかったです。またお話しましょうね。🌸"})
+    st.session_state.messages.append({"role": "bot", "text": "今日もお話できて嬉しかったです。またお話しましょうね。🌸"})
     summary = summarize_conversation(st.session_state.history)
     if summary:
         save_memory(USER_ID, summary)
@@ -221,9 +207,12 @@ if "initialized" not in st.session_state:
     st.session_state.initialized = True
 
     greeting = chat_flexible("おはようございます", [], memory)
-    st.session_state.history  += [{"role":"user","content":"おはようございます"},{"role":"assistant","content":greeting["reply"]}]
-    st.session_state.messages.append({"role":"bot","text":greeting["reply"]})
-    save_log_direct(greeting, 1)
+    st.session_state.history  += [
+        {"role": "user",      "content": "おはようございます"},
+        {"role": "assistant", "content": greeting["reply"]},
+    ]
+    st.session_state.messages.append({"role": "bot", "text": greeting["reply"]})
+    save_log(greeting, turn_count=1)
     speak(greeting["reply"])
 
 
@@ -247,12 +236,11 @@ for msg in st.session_state.messages[-6:]:
 st.divider()
 
 # =============================================
-# st_javascript で音声認識結果を受け取る
-# ボタンを押したタイミングで一度だけ実行
+# 音声認識
 # =============================================
 if not st.session_state.get("listening"):
     if st.button("🎤 はなしかける", key="mic_btn", use_container_width=True):
-        st.session_state.listening = True
+        st.session_state.listening    = True
         st.session_state.voice_result = None
         st.rerun()
 else:
@@ -271,7 +259,6 @@ else:
         });
     """)
 
-    # voice_resultが返ってきたとき（0やNoneでなく文字列）だけ処理
     if voice_result is not None and isinstance(voice_result, str):
         st.session_state.listening = False
         user_text = voice_result.strip()
@@ -285,9 +272,15 @@ else:
         else:
             st.session_state.turn += 1
             result = chat_flexible(user_text, st.session_state.history, st.session_state.memory)
-            st.session_state.history += [{"role":"user","content":user_text},{"role":"assistant","content":result["reply"]}]
-            st.session_state.messages += [{"role":"user","text":user_text},{"role":"bot","text":result["reply"]}]
-            save_log_direct(result, st.session_state.turn)
+            st.session_state.history += [
+                {"role": "user",      "content": user_text},
+                {"role": "assistant", "content": result["reply"]},
+            ]
+            st.session_state.messages += [
+                {"role": "user", "text": user_text},
+                {"role": "bot",  "text": result["reply"]},
+            ]
+            save_log(result, turn_count=1)
             speak(result["reply"])
             st.rerun()
 

@@ -7,16 +7,18 @@ wellness-watch - みゆきさん用ダッシュボード
 """
 
 import os
-import sqlite3
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime, date, timedelta
+from collections import defaultdict
 from dotenv import load_dotenv
+from azure.data.tables import TableServiceClient
 
 load_dotenv()
 
-DB_PATH = "wellness.db"
+CONNECTION_STRING = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
+TABLE_NAME        = "WellnessLog"
 
 PARENTS = {
     "parent_mom": "お母さん",
@@ -68,57 +70,102 @@ if not st.session_state.dash_auth:
 # データ取得
 # =============================================
 def get_stats(user_id, days=7):
+    """過去N日分を日付ごとに集計。データがない日も0で補完する。"""
+    cutoff = (date.today() - timedelta(days=days - 1)).isoformat()
+
+    raw_entities = []
+    error_msg = None
+
     try:
-        conn = sqlite3.connect(DB_PATH)
-        rows = conn.execute("""
-            SELECT date, AVG(sentiment) as avg_sentiment,
-                   SUM(input_tokens + output_tokens) as total_tokens,
-                   SUM(turn_count) as total_turns
-            FROM daily_log
-            WHERE user_id = ? AND date >= ?
-            GROUP BY date ORDER BY date ASC
-        """, (user_id, (date.today() - timedelta(days=days)).isoformat())).fetchall()
-        conn.close()
-        return rows
-    except:
-        return []
+        service      = TableServiceClient.from_connection_string(CONNECTION_STRING)
+        table_client = service.get_table_client(TABLE_NAME)
+        entities     = table_client.query_entities(
+            query_filter=f"PartitionKey eq '{user_id}' and date ge '{cutoff}'"
+        )
+        raw_entities = list(entities)
+    except Exception as e:
+        error_msg = str(e)
+
+    # デバッグ情報（サイドバーに表示）
+    with st.sidebar:
+        st.caption(f"**{user_id} デバッグ**")
+        st.caption(f"cutoff: `{cutoff}`")
+        if error_msg:
+            st.error(f"取得エラー: {error_msg}")
+        else:
+            st.caption(f"取得件数: {len(raw_entities)} 件")
+            if raw_entities:
+                sample = raw_entities[0]
+                st.caption(f"date値例: `{sample.get('date', 'なし')}`")
+                st.caption(f"sentiment値例: `{sample.get('sentiment', 'なし')}`")
+
+    # 日付ごとに集計
+    # ※ 1レコード = 1会話（turn_count は加算しない）
+    daily: dict = defaultdict(lambda: {"sentiments": [], "turns": 0})
+    for entity in raw_entities:
+        d = entity.get("date", "")
+        if entity.get("sentiment") is not None:
+            daily[d]["sentiments"].append(float(entity["sentiment"]))
+        daily[d]["turns"] += 1  # レコード件数 = 会話回数
+
+    # 7日分の日付リスト（データない日は0補完）
+    all_dates = [(date.today() - timedelta(days=i)).isoformat() for i in range(days - 1, -1, -1)]
+    result = []
+    for d in all_dates:
+        if d in daily:
+            s = daily[d]["sentiments"]
+            result.append({
+                "date"         : d,
+                "avg_sentiment": round(sum(s) / len(s), 2) if s else None,
+                "total_turns"  : daily[d]["turns"],
+            })
+        else:
+            result.append({
+                "date"         : d,
+                "avg_sentiment": None,
+                "total_turns"  : 0,
+            })
+    return result
 
 
-def get_today_stats(user_id):
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        row = conn.execute("""
-            SELECT AVG(sentiment), SUM(input_tokens + output_tokens), SUM(turn_count)
-            FROM daily_log WHERE user_id = ? AND date = ?
-        """, (user_id, date.today().isoformat())).fetchone()
-        conn.close()
-        return row
-    except:
-        return None
-
-
+# =============================================
+# グラフ生成
+# =============================================
 def make_sentiment_chart(df, color):
-    """感情スコア折れ線グラフ（X軸を日付文字列で表示）"""
+    df_with_data = df[df["感情スコア"].notna()]
+
     fig = go.Figure()
+    fig.add_hrect(y0=0.6, y1=1.0, fillcolor="rgba(100,200,100,0.07)", line_width=0)
+    fig.add_hrect(y0=0.4, y1=0.6, fillcolor="rgba(255,200,0,0.07)",   line_width=0)
+    fig.add_hrect(y0=0.0, y1=0.4, fillcolor="rgba(255,100,100,0.07)", line_width=0)
+
     fig.add_trace(go.Scatter(
-        x=df["日付"],
-        y=df["感情スコア"],
+        x=df_with_data["日付"],
+        y=df_with_data["感情スコア"],
         mode="lines+markers",
-        line=dict(color=color, width=2),
-        marker=dict(size=6),
-        fill="none",
+        line=dict(color=color, width=2.5),
+        marker=dict(size=8, color=color),
         hovertemplate="%{x}<br>感情スコア: %{y:.2f}<extra></extra>",
     ))
+
     fig.update_layout(
         margin=dict(l=0, r=0, t=10, b=0),
-        height=160,
+        height=180,
         xaxis=dict(
-            tickvals=df["日付"].tolist(),
-            ticktext=df["日付"].tolist(),
-            tickangle=-45,
-            tickfont=dict(size=11),
+            categoryorder="array",
+            categoryarray=df["日付"].tolist(),  # 全7日を固定順で表示
+            tickangle=0,
+            tickfont=dict(size=10),
+            showgrid=False,
         ),
-        yaxis=dict(range=[0, 1], tickfont=dict(size=11)),
+        yaxis=dict(
+            range=[0, 1],
+            tickvals=[0, 0.4, 0.6, 1.0],
+            ticktext=["0", "0.4", "0.6", "1.0"],
+            tickfont=dict(size=11),
+            showgrid=True,
+            gridcolor="rgba(0,0,0,0.05)",
+        ),
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
         showlegend=False,
@@ -127,24 +174,32 @@ def make_sentiment_chart(df, color):
 
 
 def make_turns_chart(df, color):
-    """会話ターン数棒グラフ（X軸を日付文字列で表示）"""
+    bar_colors = [
+        color if v > 0 else "rgba(200,200,200,0.3)"
+        for v in df["ターン数"]
+    ]
     fig = go.Figure()
     fig.add_trace(go.Bar(
         x=df["日付"],
         y=df["ターン数"],
-        marker_color=color,
-        hovertemplate="%{x}<br>ターン数: %{y}回<extra></extra>",
+        marker_color=bar_colors,
+        hovertemplate="%{x}<br>%{y} 回<extra></extra>",
     ))
     fig.update_layout(
         margin=dict(l=0, r=0, t=10, b=0),
-        height=160,
+        height=180,
         xaxis=dict(
-            tickvals=df["日付"].tolist(),
-            ticktext=df["日付"].tolist(),
-            tickangle=-45,
-            tickfont=dict(size=11),
+            categoryorder="array",
+            categoryarray=df["日付"].tolist(),  # 全7日を固定順で表示
+            tickangle=0,
+            tickfont=dict(size=10),
+            showgrid=False,
         ),
-        yaxis=dict(tickfont=dict(size=11)),
+        yaxis=dict(
+            tickfont=dict(size=11),
+            showgrid=True,
+            gridcolor="rgba(0,0,0,0.05)",
+        ),
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
         showlegend=False,
@@ -156,68 +211,53 @@ def make_turns_chart(df, color):
 # UI描画
 # =============================================
 st.markdown('<div class="title">🌸 見守りダッシュボード</div>', unsafe_allow_html=True)
-st.caption(f"最終更新：{datetime.now().strftime('%Y/%m/%d %H:%M')}")
 
-# ── 今日の状況（父・母 横並び） ──────────────────
-st.markdown("#### 今日の状況")
-cols = st.columns(2)
+col_title, col_btn = st.columns([4, 1])
+with col_title:
+    st.caption(f"最終更新：{datetime.now().strftime('%Y/%m/%d %H:%M')}")
+with col_btn:
+    if st.button("🔄 更新", use_container_width=True):
+        st.rerun()
 
-parent_items = list(PARENTS.items())
-for col, (user_id, parent_name) in zip(cols, parent_items):
-    with col:
-        today = get_today_stats(user_id)
-        with st.container(border=True):
-            st.markdown(f"**{parent_name}**")
-            if today and today[0] is not None:
-                sentiment = today[0]
-                turns = today[2] or 0
-                if sentiment >= 0.6:
-                    mood = "😊 元気そうです"
-                    badge = "🟢"
-                elif sentiment >= 0.4:
-                    mood = "😐 普通です"
-                    badge = "🟡"
-                else:
-                    mood = "😔 少し心配です"
-                    badge = "🔴"
-                m1, m2, m3 = st.columns(3)
-                m1.metric("状態", mood)
-                m2.metric("感情スコア", f"{sentiment:.2f}")
-                m3.metric("会話ターン", f"{turns}回")
-            else:
-                st.warning(f"⚠️ 今日まだ会話していません")
-
-# ── 7日間トレンド（父・母 横並び） ─────────────────
-st.markdown("#### 直近7日間のトレンド")
+# ── 直近7日間のトレンド ────────────────────
 COLORS = {
     "parent_mom": ("#e75480", "#f4a4be"),
     "parent_dad": ("#4a90d9", "#a0c8f0"),
 }
 
-trend_cols = st.columns(2)
+parent_items = list(PARENTS.items())
+trend_cols   = st.columns(2)
+
 for col, (user_id, parent_name) in zip(trend_cols, parent_items):
     with col:
         stats = get_stats(user_id, days=7)
         with st.container(border=True):
             st.markdown(f"**{parent_name}**")
-            if stats:
-                df = pd.DataFrame(stats, columns=["日付", "感情スコア", "トークン数", "ターン数"])
-                # 日付を「3/15」形式の文字列に変換（X軸問題の解決）
-                df["日付"] = pd.to_datetime(df["日付"]).dt.strftime("%-m/%-d")
 
-                line_color, bar_color = COLORS[user_id]
+            df = pd.DataFrame(stats)
+            df["日付"]     = pd.to_datetime(df["date"]).apply(lambda d: f"{d.month}/{d.day}")
+            df["感情スコア"] = df["avg_sentiment"]
+            df["ターン数"]   = df["total_turns"]
+
+            line_color, bar_color = COLORS[user_id]
+            active_days = df[df["ターン数"] > 0]
+
+            if len(active_days) == 0:
+                st.info("データがありません")
+            else:
                 c1, c2 = st.columns(2)
                 with c1:
-                    st.caption("感情スコア")
+                    st.caption("😊 感情スコア（高いほど元気）")
                     st.plotly_chart(make_sentiment_chart(df, line_color), use_container_width=True)
                 with c2:
-                    st.caption("会話ターン数")
+                    st.caption("💬 会話回数")
                     st.plotly_chart(make_turns_chart(df, bar_color), use_container_width=True)
 
-                # サマリー
+                avg_score = active_days["感情スコア"].mean()
+                avg_turns = active_days["ターン数"].mean()
+                talk_days = len(active_days)
+
                 s1, s2, s3 = st.columns(3)
-                s1.metric("平均スコア", f"{df['感情スコア'].mean():.2f}")
-                s2.metric("会話日数", f"{len(df)}日 / 7日")
-                s3.metric("平均ターン", f"{df['ターン数'].mean():.1f}回")
-            else:
-                st.info("データがありません")
+                s1.metric("平均スコア",   f"{avg_score:.2f}" if avg_score else "—")
+                s2.metric("会話した日数", f"{talk_days} 日 / 7日")
+                s3.metric("平均会話回数", f"{avg_turns:.1f} 回" if avg_turns else "—")
