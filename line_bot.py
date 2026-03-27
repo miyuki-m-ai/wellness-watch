@@ -35,7 +35,7 @@ import urllib.error
 import urllib.request
 import uuid
 from datetime import datetime, timedelta, timezone
-
+from azure.data.tables import TableServiceClient
 import azure.cognitiveservices.speech as speechsdk
 from azure.storage.blob import BlobSasPermissions, BlobServiceClient, generate_blob_sas
 from dotenv import load_dotenv
@@ -377,22 +377,69 @@ def verify_signature_dad(body: bytes, signature: str) -> bool:
 # =============================================
 # ログ保存（仮）
 # =============================================
-def save_log(result: dict, turn_count: int = 1):
+def save_log(user_id: str, result: dict, turn_count: int = 1):
     """
-    元のコードで save_log() が呼ばれていたので、
-    起動エラー防止のため最低限のダミーを置いておく。
-    必要ならあとで Table Storage 版に差し替え。
+    会話本文は保存せず、ダッシュボード用の最小限データだけ Azure Table Storage に保存する。
+    保存項目:
+      - PartitionKey : parent_mom / parent_dad
+      - RowKey       : 一意キー
+      - date         : JST日付
+      - timestamp    : JST時刻
+      - sentiment    : 感情スコア
+      - input_tokens : 入力トークン
+      - output_tokens: 出力トークン
     """
     try:
+        if not AZURE_STORAGE_CONNECTION_STRING:
+            logging.warning("⚠️ AZURE_STORAGE_CONNECTION_STRING 未設定のため save_log をスキップ")
+            return
+
+        # 誰のデータかを決める
+        if LINE_MOM_USER_ID and user_id == LINE_MOM_USER_ID:
+            partition_key = "parent_mom"
+        elif LINE_DAD_USER_ID and user_id == LINE_DAD_USER_ID:
+            partition_key = "parent_dad"
+        else:
+            logging.info("ℹ️ 登録されていない user_id のため save_log をスキップ: %s", user_id)
+            return
+
+        now_jst = datetime.now(timezone(timedelta(hours=9)))
+        date_str = now_jst.date().isoformat()
+        timestamp_str = now_jst.isoformat()
+        row_key = f"{timestamp_str}_{uuid.uuid4().hex}"
+
+        service = TableServiceClient.from_connection_string(AZURE_STORAGE_CONNECTION_STRING)
+        table_client = service.get_table_client(table_name="WellnessLog")
+
+        # テーブルが無ければ作成（既にあればそのまま）
+        try:
+            table_client.create_table()
+        except Exception:
+            pass
+
+        entity = {
+            "PartitionKey": partition_key,
+            "RowKey": row_key,
+            "date": date_str,
+            "timestamp": timestamp_str,
+            "sentiment": float(result.get("sentiment", 0.0)),
+            "input_tokens": int(result.get("input_tokens", 0) or 0),
+            "output_tokens": int(result.get("output_tokens", 0) or 0),
+        }
+
+        table_client.upsert_entity(entity=entity)
+
         logging.info(
-            "📝 save_log sentiment=%s input_tokens=%s output_tokens=%s turn_count=%s",
-            result.get("sentiment"),
-            result.get("input_tokens"),
-            result.get("output_tokens"),
-            turn_count,
+            "✅ save_log 保存成功 partition=%s date=%s sentiment=%s input_tokens=%s output_tokens=%s",
+            partition_key,
+            date_str,
+            entity["sentiment"],
+            entity["input_tokens"],
+            entity["output_tokens"],
         )
+
     except Exception as e:
-        logging.warning(f"⚠️ save_log 仮処理失敗：{e}")
+        logging.exception(f"❌ save_log 保存失敗: {e}")
 
 
 # =============================================
@@ -452,7 +499,7 @@ def handle_message(user_id: str, reply_token: str, user_text: str, use_voice: bo
         f"| tokens：{result.get('input_tokens', 0) + result.get('output_tokens', 0)}"
     )
 
-    save_log(result, turn_count=1)
+    save_log(user_id, result, turn_count=1)
 
     if use_voice:
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
