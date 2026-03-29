@@ -67,7 +67,7 @@ def get_today_stats(user_id: str) -> dict:
 # =============================================
 # 朝6:30 お母さんへおはようメッセージ
 # =============================================
-@app.timer_trigger(schedule="0 30 21 * * *", arg_name="myTimer", run_on_startup=False,
+@app.timer_trigger(schedule="0 30 6 * * *", arg_name="myTimer", run_on_startup=False,
                    use_monitor=False)
 def mom_morning_greeting(myTimer: func.TimerRequest) -> None:
     logging.info("朝の挨拶送信中...")
@@ -80,7 +80,7 @@ def mom_morning_greeting(myTimer: func.TimerRequest) -> None:
 # =============================================
 # 夜19:00 お母さんへおやすみメッセージ
 # =============================================
-@app.timer_trigger(schedule="0 0 10 * * *", arg_name="myTimer", run_on_startup=False,
+@app.timer_trigger(schedule="0 0 19 * * *", arg_name="myTimer", run_on_startup=False,
                    use_monitor=False)
 def mom_evening_greeting(myTimer: func.TimerRequest) -> None:
     logging.info("夜の挨拶送信中...")
@@ -93,7 +93,7 @@ def mom_evening_greeting(myTimer: func.TimerRequest) -> None:
 # =============================================
 # 夜21:00 みゆきさんへ日次レポート
 # =============================================
-@app.timer_trigger(schedule="0 0 12 * * *", arg_name="myTimer", run_on_startup=False,
+@app.timer_trigger(schedule="0 0 21 * * *", arg_name="myTimer", run_on_startup=False,
                    use_monitor=False)
 def mom_nightly_check(myTimer: func.TimerRequest) -> None:
     logging.info("21時チェック開始...")
@@ -138,7 +138,7 @@ def mom_nightly_check(myTimer: func.TimerRequest) -> None:
 # =============================================
 # 朝6:30 お父さんへおはようメッセージ
 # =============================================
-@app.timer_trigger(schedule="0 30 21 * * *", arg_name="myTimer", run_on_startup=False,
+@app.timer_trigger(schedule="0 30 6 * * *", arg_name="myTimer", run_on_startup=False,
                    use_monitor=False)
 def dad_morning_greeting(myTimer: func.TimerRequest) -> None:
     logging.info("お父さん朝の挨拶送信中...")
@@ -152,7 +152,7 @@ def dad_morning_greeting(myTimer: func.TimerRequest) -> None:
 # =============================================
 # 夜19:00 お父さんへおやすみメッセージ
 # =============================================
-@app.timer_trigger(schedule="0 0 10 * * *", arg_name="myTimer", run_on_startup=False,
+@app.timer_trigger(schedule="0 0 19 * * *", arg_name="myTimer", run_on_startup=False,
                    use_monitor=False)
 def dad_evening_greeting(myTimer: func.TimerRequest) -> None:
     logging.info("お父さん夜の挨拶送信中...")
@@ -166,7 +166,7 @@ def dad_evening_greeting(myTimer: func.TimerRequest) -> None:
 # =============================================
 # 夜21:00 みゆきさんへお父さんの日次レポート
 # =============================================
-@app.timer_trigger(schedule="0 0 12 * * *", arg_name="myTimer", run_on_startup=False,
+@app.timer_trigger(schedule="0 0 21 * * *", arg_name="myTimer", run_on_startup=False,
                    use_monitor=False)
 def dad_nightly_check(myTimer: func.TimerRequest) -> None:
     logging.info("お父さん21時チェック開始...")
