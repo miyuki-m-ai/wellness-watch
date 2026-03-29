@@ -70,6 +70,7 @@ conversation_history: dict[str, list] = {}
 
 # 朝の起床通知済みフラグ（日付ごとに管理）
 morning_notified: dict[str, str] = {}  # user_id -> 通知済みの日付
+evening_notified: dict[str, str] = {}  # user_id -> 通知済みの日付
 
 # =============================================
 # 起動時チェック
@@ -461,6 +462,15 @@ def handle_message(user_id: str, reply_token: str, user_text: str, use_voice: bo
     ):
         morning_notified[user_id] = today_str
         send_line_message("🌅 おはようございます！\nじゅんこさんが起きてLINEに返事をしましたよ😊")
+        # 夜のお休み通知
+    if (
+        LINE_MOM_USER_ID
+        and user_id == LINE_MOM_USER_ID
+        and 19 <= now.hour < 22
+        and evening_notified.get(user_id) != today_str
+    ):
+        evening_notified[user_id] = today_str
+        send_line_message("🌙 お疲れ様です！\nじゅんこさんが夜のあいさつに返事をしましたよ😊\nお休みなさい💤")
 
     parent_name = "お母さん" if (LINE_MOM_USER_ID and user_id == LINE_MOM_USER_ID) else "ユーザー"
 
