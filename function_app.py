@@ -10,6 +10,7 @@ app = func.FunctionApp()
 
 # 設定
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "")
+LINE_DAD_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_DAD_CHANNEL_ACCESS_TOKEN", "")
 LINE_MOM_USER_ID          = os.getenv("LINE_MOM_USER_ID", "")
 LINE_USER_ID              = os.getenv("LINE_USER_ID", "")
 AZURE_STORAGE_CONNECTION_STRING = os.getenv("AZURE_STORAGE_CONNECTION_STRING", "")
@@ -59,7 +60,7 @@ def get_today_stats(user_id: str) -> dict:
         return {"total_turns": 0, "avg_sentiment": None}
 
 def get_mood_label(score):
-    if score is None: return "データなし"
+    if score is None: return "会話あり（スコアなし）"
     if score >= 0.7: return "😊 元気そう"
     elif score >= 0.5: return "🙂 普通"
     else: return "😔 少し心配"
@@ -80,17 +81,17 @@ def mom_nightly_check(myTimer: func.TimerRequest) -> None:
     if stats["total_turns"] == 0:
         msg += "今日はまだ会話がありません。\nお電話してみてはいかがですか？"
     else:
-        msg += f"会話数：{stats['total_turns']}回\n状態：{get_mood_label(stats['avg_sentiment'])}\n今日もお母さんと話せましたね！"
+        msg += f"会話数：{stats['total_turns']}回\n状態：{get_mood_label(stats['avg_sentiment'])}\n今日もお母さんの様子が確認できました😊"
     send_line_message(LINE_USER_ID, msg)
 
 # --- お父さん スケジュール ---
 @app.timer_trigger(schedule="0 31 6 * * *", arg_name="myTimer") # 6:31
 def dad_morning_greeting(myTimer: func.TimerRequest) -> None:
-    send_line_message(LINE_DAD_USER_ID, "じゅんじさん、おはようございます！今日もよろしくね。")
+    send_line_message(LINE_DAD_USER_ID, "じゅんじさん、おはようございます！今日もよろしくね。", LINE_DAD_CHANNEL_ACCESS_TOKEN)
 
 @app.timer_trigger(schedule="0 1 19 * * *", arg_name="myTimer") # 19:01
 def dad_evening_greeting(myTimer: func.TimerRequest) -> None:
-    send_line_message(LINE_DAD_USER_ID, "じゅんじさん、今日も一日お疲れさまでした。ゆっくり休んでくださいね。")
+    send_line_message(LINE_DAD_USER_ID, "じゅんじさん、今日も一日お疲れさまでした。ゆっくり休んでくださいね。", LINE_DAD_CHANNEL_ACCESS_TOKEN)
 
 @app.timer_trigger(schedule="0 0 21 * * *", arg_name="myTimer") # 21:00ちょうど
 def dad_nightly_check(myTimer: func.TimerRequest) -> None:
@@ -99,5 +100,6 @@ def dad_nightly_check(myTimer: func.TimerRequest) -> None:
     if stats["total_turns"] == 0:
         msg += "今日はまだ会話がありません。\n連絡してみてはいかがですか？"
     else:
-        msg += f"会話数：{stats['total_turns']}回\n状態：{get_mood_label(stats['avg_sentiment'])}\n今日もお父さんと話せましたね！"
-    send_line_message(LINE_USER_ID, msg)
+        msg += f"会話数：{stats['total_turns']}回\n状態：{get_mood_label(stats['avg_sentiment'])}\n今日もお父さんの様子が確認できました😊"
+        
+    send_line_message(LINE_USER_ID, msg, LINE_DAD_CHANNEL_ACCESS_TOKEN)
