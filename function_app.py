@@ -3,7 +3,7 @@ import logging
 import os
 import urllib.request
 import json
-from datetime import date
+from datetime import date, datetime, timezone, timedelta
 from azure.data.tables import TableServiceClient
 
 app = func.FunctionApp()
@@ -47,8 +47,11 @@ def get_today_stats(user_id: str) -> dict:
     try:
         service = TableServiceClient.from_connection_string(AZURE_STORAGE_CONNECTION_STRING)
         table   = service.get_table_client("WellnessLog")
-        today   = date.today().isoformat()
-        entities = list(table.query_entities(query_filter=f"PartitionKey eq '{user_id}' and RowKey ge '{today}'"))
+        JST = timezone(timedelta(hours=9))
+        now_jst = datetime.now(JST)
+        today_utc_start = (now_jst.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(hours=9)).strftime("%Y-%m-%dT%H:%M:%S")
+        today_utc_end   = (now_jst.replace(hour=23, minute=59, second=59, microsecond=0) - timedelta(hours=9)).strftime("%Y-%m-%dT%H:%M:%S")
+        entities = list(table.query_entities(query_filter=f"PartitionKey eq '{user_id}' and RowKey ge '{today_utc_start}' and RowKey le '{today_utc_end}'"))
         if not entities:
             return {"total_turns": 0, "avg_sentiment": None}
         total_turns   = sum(e.get("turn_count", 0) for e in entities)
