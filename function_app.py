@@ -47,15 +47,14 @@ def get_today_stats(user_id: str) -> dict:
     try:
         service = TableServiceClient.from_connection_string(AZURE_STORAGE_CONNECTION_STRING)
         table   = service.get_table_client("WellnessLog")
-        JST = timezone(timedelta(hours=9))
-        now_jst = datetime.now(JST)
-        today_utc_start = (now_jst.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(hours=9)).strftime("%Y-%m-%dT%H:%M:%S")
-        today_utc_end   = (now_jst.replace(hour=23, minute=59, second=59, microsecond=0) - timedelta(hours=9)).strftime("%Y-%m-%dT%H:%M:%S")
-        entities = list(table.query_entities(query_filter=f"PartitionKey eq '{user_id}' and RowKey ge '{today_utc_start}' and RowKey le '{today_utc_end}'"))
+        JST     = timezone(timedelta(hours=9))
+        today   = datetime.now(JST).date().isoformat()
+        entities = list(table.query_entities(
+            query_filter=f"PartitionKey eq '{user_id}' and date eq '{today}'"))
         if not entities:
             return {"total_turns": 0, "avg_sentiment": None}
         total_turns   = sum(e.get("turn_count", 0) for e in entities)
-        sentiments    = [e.get("avg_sentiment") for e in entities if e.get("avg_sentiment") is not None]
+        sentiments    = [e.get("sentiment") for e in entities if e.get("sentiment") is not None]
         avg_sentiment = sum(sentiments) / len(sentiments) if sentiments else None
         return {"total_turns": total_turns, "avg_sentiment": avg_sentiment}
     except Exception as e:
